@@ -1,0 +1,409 @@
+---
+title: "Ejercicio Etermax"
+author: "Eloy Chang"
+date: "26 de julio de 2018"
+output: html_document
+---
+
+# Resumen
+
+Se quiere generar un modelo capaz de determinar si un usuario que ha instalado una determinada aplicación en un determinado día volvera a usar la aplicación al día siguiente, para esto se tiene un conjunto de datos con información relevante por medio de un archivo csv. 
+
+# Exploración de datos
+
+## Descripción de los datos
+
+```{r,echo=FALSE,results='hide',message=FALSE,warning=FALSE}
+
+library(plotly)
+.ExtractData<- function(filename,seed = 1){
+  set.seed(seed)
+  datos<- read.csv(file = "datos.csv")
+  datos$install_time<- as.POSIXct(as.character(datos$install_time))
+  training<- sample(nrow(datos),round(nrow(datos)*0.7))
+  test<- datos[-training,]
+  training<- datos[training,]
+  datos<- list(Training=training,Test=test)
+  return(datos)
+}
+
+Datos<- .ExtractData("datos.csv")
+
+
+```
+
+El conjunto de datos a estudiar consta de `r nrow(Datos$Training) + nrow(Datos$Test)` registros cada uno con información sobre:
+
+* user_id: Identificación de usuario.
+
+* install_time: Fecha y hora de la instalación.
+
+* platform: Sistema operativo del dispositivo (Android o iOS).
+
+* country_region: Provincia.
+
+* city: Ciudad.
+
+* gender: Género del usuario (Hombre o Mujer).
+
+* min_age_range: Mínima edad probable del usuario.
+
+* max_age_range: Máxima edad probable del usuario.
+
+* event_1: Número de ocurrencias del evento 1.
+
+* event_2: Número de ocurrencias del evento 2.
+
+* event_3: Número de ocurrencias del evento 3.
+
+* event_4: Número de ocurrencias del evento 4.
+
+* event_5: Número de ocurrencias del evento 5.
+
+* target_churn_indicator: Variable objetivo (vale 1 si el usuario jugó al siguiente día, 0 sino).
+
+## Separación del conjunto
+
+En una primera instancia se dividieron los datos en dos conjuntos, uno, con el 70% de los datos para ser usado como entrenamiento, y otro, con el 30% restante para ser usado de prueba, la selección se realizó aleatoriamente, fijando una semilla para hacer posible el reprocesamiento.
+
+|    | Entrenamiento | Prueba |
+|----|---------------|--------|
+| Número de registros | `r nrow(Datos$Training) `| `r nrow(Datos$Test)` |
+Tabla.1 - Número de datos por conjunto.
+
+## Validación
+
+Antes de realizar cualquier análisis primero se hizo una revisión de los datos, la validación consiste en:
+
+1. Verificar que no se tenga duplicidad de los id's
+
+2. Verificar que la cota mínima de edad de un usuario sea menor o igual a la cota superior.
+
+3. Búsqueda de cualquier otra anomalia.
+
+#### Verificación de user id's
+
+```{r,echo=FALSE,results='hide',message=FALSE,warning=FALSE}
+
+conteo_ids<- table(as.character(Datos$Training$user_id))
+
+```
+
+Luego de realizado un conteo de registros por cada id se consiguieron un total de `r sum(conteo_ids > 1)` con más de un registro.
+
+Debido a que los registros con un mismo ID no coincidian, es decir, no eran registros repetidos (Contenian valores diferentes para las mismas variables), se decidió eliminar estos registros con la finalidad de mantener la integridad de los datos. 
+
+| Número de registros | Cantidad de ID's |
+|---------------------|------------------|
+|  1 | `r sum(conteo_ids == 1)` |
+|  2 | `r sum(conteo_ids == 2)` |
+|  3 | `r sum(conteo_ids == 3)` |
+Tabla.2 - Cantidad de ID's según total de registros observados.
+
+
+
+#### Verificacion de rango de edad
+
+```{r,echo=FALSE,results='hide',message=FALSE,warning=FALSE}
+
+conteo_ids<- conteo_ids[conteo_ids == 1]
+Datos$Training_clean<- Datos$Training[Datos$Training$user_id %in% names(conteo_ids),]
+rm(conteo_ids)
+
+```
+
+Se encontraron un total de `r sum(Datos$Training_clean$min_age_range > Datos$Training_clean$max_age_range)` registros en los cuales la cota inferior del rango de edad era mayor a la cota superior. Debido a que no se pueda asegurar la integridad del resto de los datos para estos registros se decidió eliminar dichos registros. 
+
+#### Búsqueda de otras anomalias. 
+
+La totalidad de los registros realizados el dìa 30-06-2018, el cual coincide con ser el primer día en la muestra, son casos de éxito (El usuario uso la aplicación al día siguiente de la instalación), lo cual no coincide con el resto de los dìas, debido a que se desconoce si es un fenómeno real o no, se decidió duplicar el set de entrenamiento, manteniento en uno estos datos y eliminándolos en el otro.
+
+------
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+
+aux<- data.frame(
+    Fecha=sort(unique(as.Date(Datos$Training_clean$install_time)))
+)
+aux$Exitos<- aux$Fallas<- 0
+for(i in 1:nrow(aux)){
+    aux$Exitos[i]<- sum(Datos$Training_clean$target_churn_indicator[as.Date(Datos$Training_clean$install_time) == aux$Fecha[i]])
+    aux$Fallas[i]<- sum(Datos$Training_clean$target_churn_indicator[as.Date(Datos$Training_clean$install_time) == aux$Fecha[i]] == 0)
+}
+plot_ly(data = aux, x = ~Fecha, y = ~Exitos, name = "Éxitos", type = "bar") %>%
+    add_trace(y = ~Fallas, name = "Fallas") %>% 
+    layout(title = "Comportamiento de usuarios por fecha", barmode = "stack",
+           xaxis = list(title = "Fechas"), yaxis = list(title = "Variable Objetivo"))
+
+```
+
+## Análisis exploratorio
+
+En una primera instancia se estudió el comportamiento de los predictores contra la variable objetivo, observando principalmente la correlación entre estas, de este análisis se determinó que las variables que mayor correlación poseen con la variable a predecir son los contadores de eventos (events_1, events_2, etc.), no se logró encontrar una relación importante entre el resto de los predictores y la variable objetivo. 
+
+-------
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+
+platform<- unique(as.character(Datos$Training_clean$platform))
+gender<- unique(as.character(Datos$Training_clean$gender))
+aux<- data.frame(platform=character(),gender=character(),pr=numeric())
+aux$platform<- as.character(aux$platform)
+aux$gender<- as.character(aux$gendee)
+for(pl in platform){
+    for(g in gender){
+        tmp<- data.frame(
+            platform=pl,
+            gender=g,
+            pr=sum(Datos$Training_clean$target_churn_indicator[Datos$Training_clean$platform == pl & Datos$Training_clean$gender == g]) / sum(Datos$Training_clean$platform == pl & Datos$Training_clean$gender == g)
+        )
+        tmp$platform<- as.character(tmp$platform)
+        tmp$gender<- as.character(tmp$gender)
+        aux<- rbind(aux,tmp)
+    }
+}
+
+plot_ly(data = aux, x = ~platform, y = ~gender, z = ~pr, type = "heatmap") %>%
+    layout(title = "Plataforma | Género VS Variable objetivo",
+           xaxis = list(title = "Plataforma"), yaxis = list(title = "Género"))
+
+```
+
+-------
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+
+aux<- data.frame(
+    Ocurrencias=seq(from=0,to=max(max(Datos$Training_clean$event_1),max(Datos$Training_clean$event_2),max(Datos$Training_clean$event_3),max(Datos$Training_clean$event_4),max(Datos$Training_clean$event_5)),by=1)
+)
+aux$evento5<- aux$evento4<- aux$evento3<- aux$evento2<- aux$evento1<- 0
+for(i in 1:nrow(aux)){
+    p<- which(Datos$Training_clean$event_1 == i)
+    if(length(p) > 0){
+        aux$evento1[i]<- sum(Datos$Training_clean$target_churn_indicator[p])
+    }
+    p<- which(Datos$Training_clean$event_2 == i)
+    if(length(p) > 0){
+        aux$evento2[i]<- sum(Datos$Training_clean$target_churn_indicator[p])
+    }
+    p<- which(Datos$Training_clean$event_3 == i)
+    if(length(p) > 0){
+        aux$evento3[i]<- sum(Datos$Training_clean$target_churn_indicator[p])
+    }
+    p<- which(Datos$Training_clean$event_4 == i)
+    if(length(p) > 0){
+        aux$evento4[i]<- sum(Datos$Training_clean$target_churn_indicator[p])
+    }
+    p<- which(Datos$Training_clean$event_5 == i)
+    if(length(p) > 0){
+        aux$evento5[i]<- sum(Datos$Training_clean$target_churn_indicator[p])
+    }
+}
+aux$evento1<- aux$evento1 /sum(aux$evento1)
+aux$evento2<- aux$evento2 /sum(aux$evento2)
+aux$evento3<- aux$evento3 /sum(aux$evento3)
+aux$evento4<- aux$evento4 /sum(aux$evento4)
+aux$evento5<- aux$evento5 /sum(aux$evento5)
+plot_ly(data = aux[1:30,], x = ~Ocurrencias, y = ~evento1, name = "Evento 1", type = "scatter", mode = "lines") %>%
+    add_trace(y = ~evento2, name = "Evento 2") %>%
+    add_trace(y = ~evento3, name = "Evento 3") %>%
+    add_trace(y = ~evento4, name = "Evento 4") %>%
+    add_trace(y = ~evento5, name = "Evento 5") %>%
+    layout(title = "Probabilidad de éxito por ocurrencia de eventos",
+           xaxis = list(title = "Ocurrencias de eventos"), yaxis = list(title = "Probabilidad de éxito"))
+
+```
+
+```{r,echo=FALSE,results='hide',message=FALSE,warning=FALSE}
+
+Datos$Training_clean_2<- Datos$Training_clean[Datos$Training_clean$install_time > "2018-07-01",]
+
+```
+
+------
+
+| Variable | Correlación | 
+|----------|-------------|
+| Platform | `r cor(as.numeric(Datos$Training_clean$platform),Datos$Training_clean$target_churn_indicator)` |
+| Gender | `r cor(as.numeric(Datos$Training_clean$gender),Datos$Training_clean$target_churn_indicator)` |
+| Min_age_range | `r cor(Datos$Training_clean$min_age_range,Datos$Training_clean$target_churn_indicator)` |
+| Max_age_range | `r cor(Datos$Training_clean$max_age_range,Datos$Training_clean$target_churn_indicator)` |
+| Event 1 | `r cor(Datos$Training_clean$event_1,Datos$Training_clean$target_churn_indicator)` |
+| Event 2 | `r cor(Datos$Training_clean$event_2,Datos$Training_clean$target_churn_indicator)` |
+| Event 3 | `r cor(Datos$Training_clean$event_3,Datos$Training_clean$target_churn_indicator)` |
+| Event 4 | `r cor(Datos$Training_clean$event_4,Datos$Training_clean$target_churn_indicator)` |
+| Event 5 | `r cor(Datos$Training_clean$event_5,Datos$Training_clean$target_churn_indicator)` |
+Tabla.3 - Cálculo de correlaciones.
+
+# Modelado
+
+## Descripción del modelo
+
+El modelo propuesto se trata de una red bayesiana la cual utiliza la probabilidad marginal de éxito condicionada a las ocurrencias de un determinado evento para luego generar la función de densidad de probabilidad de éxito. 
+
+El proceso de entrenamiento del modelo consta de:
+
+1. Calcular la probabilidad de éxito para cada uno de los posibles niveles de ocurrencia de un determinado evento. (Esto se hace por separado para cada uno de los 5 eventos).
+
+2. Cálculo de las correlaciones entre el número de ocurrencias de cada uno de los eventos y la variable a predecir, esta correlación es normalizada siguiendo la siguiente formula:
+
+$$ \hat{Cor}=\dfrac{Cor + 1}{2}$$
+Donde $Cor$ es el vector de correlación de cada uno de los eventos con la variable objetivo.
+
+Luego de normalizada se aplica la siguiente transformación:
+
+$$\tilde{Cor}=\dfrac{\hat{Cor}}{\sum{\hat{Cor}}}$$
+
+
+De esta forma nos aseguramos que $\sum{\tilde{cor}}=1$ y mantenga la relaciones de correlación deseadas. 
+
+La aplicación del modelo a nuevos datos se resume en:
+
+1. Obtener el número de ocurrencias de cada uno de los eventos medidos. 
+
+2. Calcular la probabilidad de éxito según la siguiente ecuación:
+
+$$\mathbb{P}(Exito)=\sum_{i=1}^{5}{\mathbb{P}(Exito_i)\cdotp\tilde{Cor}_i}$$
+
+3. Si $\mathbb{P}(Exito) > 0.5$ Entonces predecimos que el usuario usará la aplicación el siguiente día. 
+
+![Modelo a aplicar](Modelo.png)
+
+## Prueba del modelo
+
+Para calcular la eficiencia del modelo se tomó en cuenta la cantidad de aciertos sobre los `r nrow(Datos$Test)` datos reservados para las pruebas. Adicionalmente se realizó una medición del tiempo de entrenamiento y de estimación en orden de tomar en cuenta la aplicabilidad del modelo. 
+
+Se debe recordar que se harán pruebas para el mismo modelo entrenado con dos conjuntos de datos, el primero contiene los datos del 2018-07-30, mientras que el segundo no.
+
+
+```{r, results='hide',echo=FALSE,warning=FALSE,message=FALSE}
+
+# Entrenamiento
+network_train<- function(datos){
+  weigths<- c(
+    cor(datos$event_1,datos$target_churn_indicator),
+    cor(datos$event_2,datos$target_churn_indicator),
+    cor(datos$event_3,datos$target_churn_indicator),
+    cor(datos$event_4,datos$target_churn_indicator),
+    cor(datos$event_5,datos$target_churn_indicator)
+  )
+  weigths<- (weigths + 1) / 2
+  weigths<- weigths / sum(weigths)
+  prob<- function(X){
+    salida<- sum(X)/length(X)
+    return(salida)
+  }
+  event1<- tapply(datos$target_churn_indicator, datos$event_1, prob)
+  event2<- tapply(datos$target_churn_indicator, datos$event_2, prob)
+  event3<- tapply(datos$target_churn_indicator, datos$event_3, prob)
+  event4<- tapply(datos$target_churn_indicator, datos$event_4, prob)
+  event5<- tapply(datos$target_churn_indicator, datos$event_5, prob)
+  # Calculo de umbral
+  datos$event_1<- as.character(datos$event_1)
+  datos$event_2<- as.character(datos$event_2)
+  datos$event_3<- as.character(datos$event_3)
+  datos$event_4<- as.character(datos$event_4)
+  datos$event_5<- as.character(datos$event_5)
+  prueba<- numeric(length = nrow(datos))
+  for(i in 1:nrow(datos)){
+    prueba[i]<- event1[names(event1) == datos$event_1[i]]*weigths[1] +
+      event2[names(event2) == datos$event_2[i]]*weigths[2] +
+      event3[names(event3) == datos$event_3[i]]*weigths[3] +
+      event4[names(event4) == datos$event_4[i]]*weigths[4] +
+      event5[names(event5) == datos$event_5[i]]*weigths[5]
+  }
+  model<- list(
+    Pesos=weigths,
+    probabilidades=list(
+      event1=event1,
+      event2=event2,
+      event3=event3,
+      event4=event4,
+      event5=event5
+    ),
+    Umbral=0.5,
+    Error=mean(abs(round(prueba) - datos$target_churn_indicator))
+  )
+  return(model)
+}
+t<- Sys.time()
+modelo<- network_train(Datos$Training_clean)
+modelo$Tiempo<- Sys.time() - t
+t<- Sys.time()
+modelo_2<- network_train(Datos$Training_clean_2)
+modelo_2$Tiempo<- Sys.time() - t
+# Prueba
+network_test<- function(modelo,datos){
+  salida<- numeric(length = nrow(datos))
+  tiempo<- numeric(length = nrow(datos))
+  for(i in 1:nrow(datos)){
+      t<- Sys.time()
+    if(datos$event_1[i] %in% names(modelo$probabilidades$event1)){
+      aux1<- modelo$probabilidades$event1[names(modelo$probabilidades$event1) == datos$event_1[i]]
+    }
+    else{
+      aux1<- 0
+    }
+    if(datos$event_2[i] %in% names(modelo$probabilidades$event2)){
+      aux2<- modelo$probabilidades$event2[names(modelo$probabilidades$event2) == datos$event_2[i]]
+    }
+    else{
+      aux2<- 0
+    }
+    if(datos$event_3[i] %in% names(modelo$probabilidades$event3)){
+      aux3<- modelo$probabilidades$event3[names(modelo$probabilidades$event3) == datos$event_3[i]]
+    }
+    else{
+      aux3<- 0
+    }
+    if(datos$event_4[i] %in% names(modelo$probabilidades$event4)){
+      aux4<- modelo$probabilidades$event4[names(modelo$probabilidades$event4) == datos$event_4[i]]
+    }
+    else{
+      aux4<- 0
+    }
+    if(datos$event_5[i] %in% names(modelo$probabilidades$event5)){
+      aux5<- modelo$probabilidades$event5[names(modelo$probabilidades$event5) == datos$event_5[i]]
+    }
+    else{
+      aux5<- 0
+    }
+    salida[i]<- aux1*modelo$Pesos[1] + aux2*modelo$Pesos[2] + 
+      aux3*modelo$Pesos[3] + aux4*modelo$Pesos[4] + aux5*modelo$Pesos[5]
+    salida[i]<- ifelse(salida[i] < modelo$Umbral,0,1)
+    tiempo[i]<- difftime(Sys.time(),t,units = "secs")
+  }
+  salida<- list(
+    Estimado=salida,
+    Error=mean(abs(salida - datos$target_churn_indicator)),
+    Tiempo=tiempo
+  )
+  return(salida)
+}
+prueba<- network_test(modelo,Datos$Test)
+prueba_2<- network_test(modelo_2,Datos$Test)
+
+```
+
+| Estadístico | Modelo con 30-Jun | Modelo sin 30-Jun |
+|-------------|-------------------|-------------------|
+| $\mathbb{P}(Exito)$ | `r 1 - prueba$Error` | `r 1 - prueba_2$Error` |
+| Tiempo de entrenamiento | `r round(as.numeric(modelo$Tiempo),5)` S | `r round(as.numeric(modelo_2$Tiempo),5)` S |
+| Datos de entrenamiento | `r nrow(Datos$Training_clean)` | `r nrow(Datos$Training_clean_2)` S |
+| Promedio tiempo estimación | `r round(mean(prueba$Tiempo),5)` S | `r round(mean(prueba_2$Tiempo),5)` S |
+
+En conclusión el modelo presentado tiene un procentaje de acierto de `r round(100*mean(1-prueba$Error,1 - prueba_2$Error),2)`% aproximadamente. Este podría elevarse aplicando un método de optimización sobre las variables de peso.  Adicionalmente se presentaron tiempos de entrenamiento y estimación bajos lo cual hace al modelo factible de implementar. 
+
+```{r,echo=FALSE}
+
+aux<- data.frame(
+    x=c("Aciertos","Desaciertos"),
+    modelo=c(sum(prueba$Estimado==Datos$Test$target_churn_indicator),sum(prueba$Estimado!=Datos$Test$target_churn_indicator)),
+    modelo2=c(sum(prueba_2$Estimado==Datos$Test$target_churn_indicator),sum(prueba_2$Estimado!=Datos$Test$target_churn_indicator))
+)
+plot_ly(data = aux, x = ~x,y =~modelo, name = "Modelo con 30-Jun", type = "bar") %>% add_trace(y = ~modelo2, name = "Modelo sin 30-Jun") %>% layout(title = "Cantidad de aciertos y desaciertos", xaxis = list(title="", zeroline = FALSE), yaxis = list(title = "", zeroline = FALSE))
+
+```
+
+
+La función utilizada para el entrenamiento y aplicación del modelo puede ser revisada [aquí](LibEtermax.R)
